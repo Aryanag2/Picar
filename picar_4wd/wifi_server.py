@@ -26,6 +26,8 @@ def move_forward():
     with state_lock:
         car_state["direction"] = "forward"
         car_state["speed"] = 30
+    time.sleep(1)  # Move for 1 second
+    stop_car()
     
 def move_backward():
     print("Moving backward")
@@ -33,18 +35,24 @@ def move_backward():
     with state_lock:
         car_state["direction"] = "backward"
         car_state["speed"] = 30
+    time.sleep(1)  # Move for 1 second
+    stop_car()
 
 def turn_left():
     print("Turning left")
     fc.turn_left(60)
     with state_lock:
         car_state["direction"] = "left"
+    time.sleep(1)  # Turn for 1 second
+    stop_car()
 
 def turn_right():
     print("Turning right")
     fc.turn_right(60)
     with state_lock:
         car_state["direction"] = "right"
+    time.sleep(1)  # Turn for 1 second
+    stop_car()
 
 def stop_car():
     print("Stopping")
@@ -87,29 +95,41 @@ def update_car_state():
             print(f"Error updating state: {e}")
             time.sleep(1)
 
-def process_command(command):
-    """Process received command and control the car"""
-    command = command.lower().strip()
-    
-    if command == "forward":
-        move_forward()
-    elif command == "backward":
-        move_backward()
-    elif command == "left":
-        turn_left()
-    elif command == "right":
-        turn_right()
-    elif command == "stop":
-        stop_car()
-    elif command == "status":
-        # Just return current status, no need to change car state
-        pass
-    else:
-        print(f"Unknown command: {command}")
-    
-    # Return current state regardless of command
-    with state_lock:
-        return dict(car_state)  # Return a copy of the state
+def handle_client(client_socket, addr):
+    """Handle an individual client connection"""
+    print(f"Client connected: {addr}")
+    try:
+        while True:
+            # Receive command
+            data = client_socket.recv(1024)
+            if not data:
+                print(f"Client disconnected: {addr}")
+                break
+            
+            command = data.decode('utf-8').strip()
+            print(f"Received command from {addr}: {command}")
+            
+            # Process command
+            if command == "forward":
+                threading.Thread(target=move_forward).start()
+            elif command == "backward":
+                threading.Thread(target=move_backward).start()
+            elif command == "left":
+                threading.Thread(target=turn_left).start()
+            elif command == "right":
+                threading.Thread(target=turn_right).start()
+            elif command == "stop":
+                stop_car()
+            
+            # Send current state back to client
+            with state_lock:
+                response = json.dumps(car_state)
+            client_socket.sendall(response.encode('utf-8'))
+    except Exception as e:
+        print(f"Error handling client {addr}: {e}")
+    finally:
+        client_socket.close()
+        print(f"Connection with {addr} closed")
 
 # --- TCP Server Setup ---
 def start_server():
@@ -119,25 +139,18 @@ def start_server():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((HOST, PORT))
-        s.listen()
+        s.listen(5)  # Allow up to 5 pending connections
         print(f"Server listening on port {PORT}...")
         
         while True:
             try:
-                client, client_addr = s.accept()
-                with client:
-                    print(f"Connected by {client_addr}")
-                    data = client.recv(1024)
-                    if not data:
-                        continue
-                    
-                    command = data.decode().strip()
-                    print(f"Received command: {command}")
-                    
-                    response = process_command(command)
-                    client.sendall(json.dumps(response).encode())
+                client, addr = s.accept()
+                # Start a new thread for each client
+                client_thread = threading.Thread(target=handle_client, args=(client, addr), daemon=True)
+                client_thread.start()
             except Exception as e:
-                print(f"Connection error: {e}")
+                print(f"Error accepting connection: {e}")
+                time.sleep(1)
 
 if __name__ == "__main__":
     try:
